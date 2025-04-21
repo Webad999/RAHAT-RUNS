@@ -1,0 +1,404 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Rahat Runs</title>
+    <style>
+        body {
+            text-align: center;
+            font-family: Arial, sans-serif;
+            background-color: #f0f0f0;
+            margin: 0;
+            overflow: hidden;
+        }
+        h1 {
+            color: #1E90FF;
+            font-size: 2em;
+            margin: 10px 0;
+        }
+        p {
+            color: #FFFFFF;
+            background-color: #333;
+            padding: 8px;
+            display: inline-block;
+            border-radius: 5px;
+            font-size: 1em;
+            margin: 5px;
+        }
+        canvas {
+            border: 2px solid #333;
+            display: block;
+            margin: 10px auto;
+            max-width: 100%;
+            max-height: 80vh;
+            touch-action: none;
+        }
+        @media (max-width: 600px) {
+            h1 {
+                font-size: 1.5em;
+            }
+            p {
+                font-size: 0.9em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <h1>Rahat Runs</h1>
+    <p>PC: Spacebar to jump | Mobile: Tap to jump | Click/Tap to restart</p>
+    <canvas id="gameCanvas"></canvas>
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Responsive canvas
+        function resizeCanvas() {
+            const maxWidth = 800;
+            const maxHeight = 400;
+            const aspectRatio = maxWidth / maxHeight;
+            let width = Math.min(window.innerWidth * 0.9, maxWidth);
+            let height = width / aspectRatio;
+            if (height > window.innerHeight * 0.8) {
+                height = window.innerHeight * 0.8;
+                width = height * aspectRatio;
+            }
+            canvas.width = width;
+            canvas.height = height;
+        }
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+
+        // Player properties
+        const player = {
+            x: canvas.width * 0.125,
+            y: canvas.height * 0.75,
+            width: canvas.width * 0.0625,
+            height: canvas.height * 0.2,
+            speed: 0,
+            jumping: false,
+            jumpPower: canvas.height * 0.0375,
+            frame: 0,
+            frameCount: 6,
+            frameTimer: 0,
+            frameInterval: 8
+        };
+
+        // Game properties
+        let score = 0;
+        let highScore = localStorage.getItem('rahatRunsHighScore') ? parseInt(localStorage.getItem('rahatRunsHighScore')) : 0;
+        let gameOver = false;
+        const gravity = 0.6;
+        const obstacles = [];
+        const obstacleTypes = ['man', 'police'];
+        let obstacleTimer = 0;
+        const obstacleInterval = 80;
+        let roadOffset = 0;
+        const roadSpeed = 6;
+
+        // Draw background
+        function drawBackground() {
+            const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height * 0.875);
+            gradient.addColorStop(0, '#87CEEB');
+            gradient.addColorStop(1, '#E0FFFF');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, canvas.width, canvas.height * 0.875);
+
+            // Clouds
+            ctx.fillStyle = '#FFF';
+            ctx.beginPath();
+            ctx.arc(canvas.width * 0.125, canvas.height * 0.125, canvas.width * 0.0375, 0, Math.PI * 2);
+            ctx.arc(canvas.width * 0.1625, canvas.height * 0.125, canvas.width * 0.05, 0, Math.PI * 2);
+            ctx.arc(canvas.width * 0.2, canvas.height * 0.125, canvas.width * 0.0375, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(canvas.width * 0.75, canvas.height * 0.2, canvas.width * 0.04375, 0, Math.PI * 2);
+            ctx.arc(canvas.width * 0.7875, canvas.height * 0.2, canvas.width * 0.05625, 0, Math.PI * 2);
+            ctx.arc(canvas.width * 0.825, canvas.height * 0.2, canvas.width * 0.04375, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // Draw animated road
+        function drawRoad() {
+            ctx.fillStyle = '#444';
+            ctx.fillRect(0, canvas.height * 0.875, canvas.width, canvas.height * 0.125);
+            ctx.fillStyle = '#FFF';
+            roadOffset = (roadOffset + roadSpeed) % (canvas.width * 0.075);
+            for (let x = -roadOffset; x < canvas.width; x += canvas.width * 0.075) {
+                ctx.fillRect(x, canvas.height * 0.9375, canvas.width * 0.05, canvas.height * 0.0125);
+            }
+        }
+
+        // Draw player
+        function drawPlayer() {
+            ctx.fillStyle = '#000';
+            ctx.fillRect(player.x + player.width * 0.2, player.y, player.width * 0.6, player.height * 0.5);
+            ctx.fillStyle = '#FF0000';
+            ctx.fillRect(player.x + player.width * 0.2, player.y + player.height * 0.125, player.width * 0.6, player.height * 0.375);
+            ctx.fillStyle = '#0000FF';
+            ctx.fillRect(player.x + player.width * 0.2, player.y + player.height * 0.5, player.width * 0.6, player.height * 0.25);
+            ctx.fillStyle = '#000';
+            ctx.beginPath();
+            ctx.arc(player.x + player.width * 0.5, player.y - player.height * 0.125, player.width * 0.3, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#000';
+            if (player.frame < 3) {
+                ctx.fillRect(player.x, player.y + player.height * 0.125, player.width * 0.2, player.height * 0.25);
+                ctx.fillRect(player.x + player.width * 0.8, player.y + player.height * 0.25, player.width * 0.2, player.height * 0.25);
+                ctx.fillRect(player.x + player.width * 0.2, player.y + player.height * 0.75, player.width * 0.2, player.height * 0.25);
+                ctx.fillRect(player.x + player.width * 0.6, player.y + player.height * 0.625, player.width * 0.2, player.height * 0.25);
+            } else {
+                ctx.fillRect(player.x, player.y + player.height * 0.25, player.width * 0.2, player.height * 0.25);
+                ctx.fillRect(player.x + player.width * 0.8, player.y + player.height * 0.125, player.width * 0.2, player.height * 0.25);
+                ctx.fillRect(player.x + player.width * 0.2, player.y + player.height * 0.625, player.width * 0.2, player.height * 0.25);
+                ctx.fillRect(player.x + player.width * 0.6, player.y + player.height * 0.75, player.width * 0.2, player.height * 0.25);
+            }
+        }
+
+        // Obstacle class
+        class Obstacle {
+            constructor(type) {
+                this.width = canvas.width * 0.05;
+                this.height = canvas.height * 0.175;
+                this.x = canvas.width;
+                this.y = canvas.height * 0.7;
+                this.speed = roadSpeed;
+                this.type = type;
+                this.frame = 0;
+                this.frameCount = 6;
+                this.frameTimer = 0;
+                this.frameInterval = 8;
+            }
+
+            draw() {
+                this.frameTimer++;
+                if (this.frameTimer >= this.frameInterval) {
+                    this.frame = (this.frame + 1) % this.frameCount;
+                    this.frameTimer = 0;
+                }
+
+                if (this.type === 'man') {
+                    ctx.fillStyle = '#8B4513';
+                    ctx.fillRect(this.x + this.width * 0.125, this.y, this.width * 0.25, this.height * 0.286);
+                    ctx.fillRect(this.x + this.width * 0.625, this.y, this.width * 0.25, this.height * 0.286);
+                    ctx.fillStyle = '#A0522D';
+                    ctx.fillRect(this.x + this.width * 0.25, this.y, this.width * 0.5, this.height * 0.429);
+                    ctx.fillStyle = '#808080';
+                    ctx.fillRect(this.x + this.width * 0.25, this.y + this.height * 0.429, this.width * 0.5, this.height * 0.286);
+                    ctx.fillStyle = '#000';
+                    if (this.frame < 3) {
+                        ctx.fillRect(this.x + this.width * 0.25, this.y + this.height * 0.714, this.width * 0.2, this.height * 0.143);
+                        ctx.fillRect(this.x + this.width * 0.55, this.y + this.height * 0.571, this.width * 0.2, this.height * 0.143);
+                    } else {
+                        ctx.fillRect(this.x + this.width * 0.25, this.y + this.height * 0.571, this.width * 0.2, this.height * 0.143);
+                        ctx.fillRect(this.x + this.width * 0.55, this.y + this.height * 0.714, this.width * 0.2, this.height * 0.143);
+                    }
+                    ctx.fillStyle = '#8B4513';
+                    ctx.beginPath();
+                    ctx.arc(this.x + this.width * 0.5, this.y - this.height * 0.143, this.width * 0.25, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.fillStyle = '#FFD700';
+                    ctx.fillRect(this.x + this.width * 0.125, this.y - this.height * 0.286, this.width * 0.75, this.height * 0.143);
+                    ctx.fillStyle = '#FFF';
+                    ctx.fillRect(this.x + this.width * 0.375, this.y - this.height * 0.214, this.width * 0.1, this.height * 0.05);
+                    ctx.fillRect(this.x + this.width * 0.525, this.y - this.height * 0.214, this.width * 0.1, this.height * 0.05);
+                    ctx.fillStyle = '#000';
+                    ctx.fillRect(this.x + this.width * 0.475, this.y - this.height * 0.179, this.width * 0.05, this.height * 0.05);
+                    ctx.fillStyle = '#FF0000';
+                    ctx.beginPath();
+                    ctx.arc(this.x + this.width * 0.5, this.y - this.height * 0.107, this.width * 0.1, 0, Math.PI);
+                    ctx.fill();
+                } else {
+                    ctx.fillStyle = '#000';
+                    ctx.fillRect(this.x + this.width * 0.125, this.y, this.width * 0.25, this.height * 0.286);
+                    ctx.fillRect(this.x + this.width * 0.625, this.y, this.width * 0.25, this.height * 0.286);
+                    ctx.fillStyle = '#0000FF';
+                    ctx.fillRect(this.x + this.width * 0.25, this.y, this.width * 0.5, this.height * 0.429);
+                    ctx.fillStyle = '#FFD700';
+                    ctx.fillRect(this.x + this.width * 0.375, this.y + this.height * 0.143, this.width * 0.25, this.height * 0.143);
+                    ctx.fillStyle = '#000';
+                    ctx.fillRect(this.x + this.width * 0.25, this.y + this.height * 0.429, this.width * 0.5, this.height * 0.071);
+                    ctx.fillStyle = '#000';
+                    if (this.frame < 3) {
+                        ctx.fillRect(this.x + this.width * 0.25, this.y + this.height * 0.714, this.width * 0.2, this.height * 0.143);
+                        ctx.fillRect(this.x + this.width * 0.55, this.y + this.height * 0.571, this.width * 0.2, this.height * 0.143);
+                    } else {
+                        ctx.fillRect(this.x + this.width * 0.25, this.y + this.height * 0.571, this.width * 0.2, this.height * 0.143);
+                        ctx.fillRect(this.x + this.width * 0.55, this.y + this.height * 0.714, this.width * 0.2, this.height * 0.143);
+                    }
+                    ctx.fillStyle = '#000';
+                    ctx.beginPath();
+                    ctx.arc(this.x + this.width * 0.5, this.y - this.height * 0.143, this.width * 0.25, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.fillStyle = '#000080';
+                    ctx.fillRect(this.x + this.width * 0.125, this.y - this.height * 0.286, this.width * 0.75, this.height * 0.143);
+                    ctx.fillStyle = '#808080';
+                    ctx.fillRect(this.x + this.width * 0.875, this.y + this.height * 0.143, this.width * 0.125, this.height * 0.286);
+                    ctx.fillStyle = '#FFF';
+                    ctx.fillRect(this.x + this.width * 0.375, this.y - this.height * 0.214, this.width * 0.1, this.height * 0.05);
+                    ctx.fillRect(this.x + this.width * 0.525, this.y - this.height * 0.214, this.width * 0.1, this.height * 0.05);
+                    ctx.fillStyle = '#000';
+                    ctx.fillRect(this.x + this.width * 0.475, this.y - this.height * 0.179, this.width * 0.05, this.height * 0.05);
+                    ctx.fillStyle = '#000';
+                    ctx.fillRect(this.x + this.width * 0.4, this.y - this.height * 0.107, this.width * 0.2, this.height * 0.036);
+                }
+            }
+
+            update() {
+                this.x -= this.speed;
+            }
+        }
+
+        // Handle input
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'Space' && !player.jumping && !gameOver) {
+                player.speed = -player.jumpPower;
+                player.jumping = true;
+            }
+        });
+
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            if (!player.jumping && !gameOver) {
+                player.speed = -player.jumpPower;
+                player.jumping = true;
+            }
+        });
+
+        // Restart
+        canvas.addEventListener('click', () => {
+            if (gameOver) {
+                resetGame();
+            }
+        });
+        canvas.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            if (gameOver) {
+                resetGame();
+            }
+        });
+
+        // Collision detection
+        function checkCollision(obstacle) {
+            return player.x < obstacle.x + obstacle.width &&
+                   player.x + player.width > obstacle.x &&
+                   player.y < obstacle.y + obstacle.height &&
+                   player.y + player.height > obstacle.y;
+        }
+
+        // Reset game
+        function resetGame() {
+            score = 0;
+            obstacles.length = 0;
+            obstacleTimer = 0;
+            player.y = canvas.height * 0.75;
+            player.speed = 0;
+            player.jumping = false;
+            gameOver = false;
+            roadOffset = 0;
+            gameLoop();
+        }
+
+        // Game loop
+        function gameLoop() {
+            if (!gameOver) {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                drawBackground();
+                drawRoad();
+                player.speed += gravity;
+                player.y += player.speed;
+                if (player.y > canvas.height * 0.75) {
+                    player.y = canvas.height * 0.75;
+                    player.speed = 0;
+                    player.jumping = false;
+                }
+                player.frameTimer++;
+                if (player.frameTimer >= player.frameInterval) {
+                    player.frame = (player.frame + 1) % player.frameCount;
+                    player.frameTimer = 0;
+                }
+                drawPlayer();
+                obstacleTimer++;
+                if (obstacleTimer > obstacleInterval) {
+                    const type = obstacleTypes[Math.floor(Math.random() * obstacleTypes.length)];
+                    obstacles.push(new Obstacle(type));
+                    obstacleTimer = 0;
+                }
+                for (let i = obstacles.length - 1; i >= 0; i--) {
+                    obstacles[i].update();
+                    obstacles[i].draw();
+                    if (checkCollision(obstacles[i])) {
+                        gameOver = true;
+                        if (score > highScore) {
+                            highScore = score;
+                            localStorage.setItem('rahatRunsHighScore', highScore);
+                        }
+                    }
+                    if (obstacles[i].x + obstacles[i].width < 0) {
+                        obstacles.splice(i, 1);
+                        score += 10;
+                    }
+                }
+                ctx.fillStyle = '#00FF00';
+                ctx.font = `${canvas.width * 0.025}px Arial`;
+                ctx.fillText(`Score: ${score}`, canvas.width * 0.0125, canvas.height * 0.075);
+                ctx.fillText(`High Score: ${highScore}`, canvas.width * 0.0125, canvas.height * 0.15);
+                requestAnimationFrame(gameLoop);
+            } else {
+                ctx.fillStyle = '#FF0000';
+                ctx.font = `${canvas.width * 0.05}px Arial`;
+                ctx.fillText('Game Over!', canvas.width / 2 - canvas.width * 0.125, canvas.height / 2 - canvas.height * 0.05);
+                ctx.fillStyle = '#FFFF00';
+                ctx.font = `${canvas.width * 0.0375}px Arial`;
+                ctx.fillText(`Score: ${score}`, canvas.width / 2 - canvas.width * 0.1, canvas.height / 2 + canvas.height * 0.05);
+                ctx.fillText(`High Score: ${highScore}`, canvas.width / 2 - canvas.width * 0.1, canvas.height / 2 + canvas.height * 0.15);
+                ctx.fillStyle = '#FFFFFF';
+                ctx.font = `${canvas.width * 0.025}px Arial`;
+                ctx.fillText('Tap/Click to Restart', canvas.width / 2 - canvas.width * 0.075, canvas.height / 2 + canvas.height * 0.25);
+            }
+        }
+
+        gameLoop();
+    </script>
+</body>
+</html>
